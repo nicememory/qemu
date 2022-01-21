@@ -1,0 +1,79 @@
+龙芯LCSR扩展指令（共12条指令）：
+本次开发已实现：
+cpucfg 用户态指令，读取指定CSR寄存器的内容，返回值为32位
+rdcsr 系统态指令，读取指定CSR寄存器的内容，返回值为32位
+wrcsr 系统态指令，将32位值写入指定CSR寄存器
+drdcsr 系统态指令，读取指定CSR寄存器的内容，返回值为64位
+dwrcsr 系统态指令，将64位值写入指定CSR寄存器
+drdtime 读取CPU计时器的值 已实现
+rdtimel 读取CPU计时器低32位的值 已实现
+rdtimeh 读取CPU计时器高32位的值 已实现
+
+以下指令具体功能不确定，猜测与虚拟化指令有关，暂无必要实现
+rdgcsr 系统态指令，读取guest的CSR寄存器
+wrgcsr 系统态指令，读取guest的CSR寄存器
+drdgcsr 系统态指令，读取guest的CSR寄存器
+dwrgcsr 系统态指令，读取guest的CSR寄存器
+
+龙芯LEXT2扩展指令（共4条指令，本次开发全部实现）：
+cto clo的相对指令，返回32位值前导1的数目，已实现
+ctz clz的相对指令，返回32位值前导0的数目，已实现
+dcto dclo的相对指令，返回64位值前导1的数目，已实现
+dctz dclz的相对指令，返回64位值前导0的数目，已实现
+
+龙芯LEXT3扩展指令（共8条指令，本次开发计划实现）：
+gsandn
+gsorn
+gsmulth
+gsmulthu
+gsdmulth
+gsdmulthu
+gsldpc
+gsdaui
+
+龙芯LSPW扩展指令（共4条指令, 实际上是龙芯LEXT扩展指令的一部分，本次开发计划实现）：
+lddir
+ldpte
+lwdir
+lwpte
+
+龙芯LAMO扩展指令（共36条指令, 实现原子化操作，本次开发计划实现）：
+amswap.w
+amswap.d
+amadd.w
+amadd.d
+amand.w
+amand.d
+amor.w
+amor.d
+amxor.w
+amxor.d
+ammax.w
+ammax.d
+ammin.w
+ammin.d
+ammaxu.w
+ammaxu.d
+amminu.w
+amminu.d
+amswap_sync.w
+amswap_sync.d
+amadd_sync.w
+amadd_sync.d
+amand_sync.w
+amand_sync.d
+amor_sync.w
+amor_sync.d
+amxor_sync.w
+amxor_sync.d
+ammax_sync.w
+ammax_sync.d
+ammin_sync.w
+ammin_sync.d
+ammaxu_sync.w
+ammaxu_sync.d
+amminu_sync.w
+amminu_sync.d
+
+龙芯LVZP虚拟化扩展指令集和二进制翻译指令集LBT1，LBT2，LBT3和LBTMMU
+因资料匮乏并且不适用于目前应用场景，暂无实现的必要。

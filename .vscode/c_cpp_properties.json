@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/msys64/mingw64/include/**",
+                "C:/msys64/mingw64/lib/glib-2.0/include"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ],
+            "windowsSdkVersion": "10.0.19041.0",
+            "compilerPath": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.29.30037\\bin\\Hostx64\\x64\\cl.exe",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "windows-msvc-x64",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json"
+        },
+        {
+            "name": "Mingw64",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/msys64/mingw64/include/glib-2.0",
+                "C:/msys64/mingw64/include/",
+                "C:/msys64/usr/include/**",
+                "C:/msys64/mingw64/lib/glib-2.0/include"
+            ],
+            "defines": [
+                "TARGET_MIPS64",
+                "TCG_TARGET_REG_BITS=64"
+            ],
+            "windowsSdkVersion": "10.0.19041.0",
+            "intelliSenseMode": "windows-gcc-x64",
+            "compilerPath": "C:/msys64/mingw64/bin/gcc.exe",
+            "cStandard": "gnu17",
+            "cppStandard": "gnu++20",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json"
+        }
+    ],
+    "version": 4
+}

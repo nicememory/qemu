@@ -1,9 +1,11 @@
 /*
- * Generic Loongson-3 Platform support
+ * Loongson-3B4000 Platform support
  *
  * Copyright (c) 2018-2020 Huacai Chen (chenhc@lemote.com)
  * Copyright (c) 2018-2020 Jiaxun Yang <jiaxun.yang@flygoat.com>
- *
+ * Copyright (c) 2021 Loongson Technology Corporation Limited
+ * Copyright (c) 2021 Jintao Yin <jintao.yin@i-soft.com.cn>
+ * 
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 2 of the License, or
@@ -19,8 +21,8 @@
  */
 
 /*
- * Generic virtualized PC Platform based on Loongson-3 CPU (MIPS64R2 with
- * extensions, 800~2000MHz)
+ * Generic virtualized PC Platform based on Loongson-3B4000 CPU
+ * (MIPS64R2withextensions, 1500MHz~1800MHz)
  */
 
 #include "qemu/osdep.h"
@@ -32,6 +34,7 @@
 #include "elf.h"
 #include "kvm_mips.h"
 #include "hw/char/serial.h"
+#include "hw/intc/loongson_ipi.h"
 #include "hw/intc/loongson_liointc.h"
 #include "hw/mips/mips.h"
 #include "hw/mips/cpudevs.h"
@@ -52,25 +55,21 @@
 #include "sysemu/reset.h"
 #include "sysemu/runstate.h"
 #include "qemu/error-report.h"
+#include "hw/hw.h"
 
-#define PM_CNTL_MODE          0x10
+#define PM_CNTL_MODE                0x10
 
-#ifndef LOONGSON_MAX_VCPUS
-#define LOONGSON_MAX_VCPUS      16
-#endif
-
-/*
- * Loongson-3's virtual machine BIOS can be obtained here:
- * 1, https://github.com/loongson-community/firmware-nonfree
- * 2, http://dev.lemote.com:8000/files/firmware/UEFI/KVM/bios_loongson3.bin
- */
-#define LOONGSON3_BIOSNAME "bios_loongson3.bin"
+#define LOONGSON3B4K_MAX_VCPUS      16
+#define LOONGSON3B4K_CORES_PER_NODE 4
+#define LOONGSON3B4K_CPU_NAME       "Loongson-3B4000"
+#define LOONGSON3B4K_BIOS_NAME      "bios_ls3b4k.bin"
+#define DEFAULT_RAM_SIZE            (2 * GiB)
 
 #define UART_IRQ            0
 #define RTC_IRQ             1
 #define PCIE_IRQ_BASE       2
 
-static const MemMapEntry virt_memmap[] = {
+static MemMapEntry virt_memmap[] = {
     [VIRT_LOWMEM] =      { 0x00000000,    0x10000000 },
     [VIRT_PM] =          { 0x10080000,         0x100 },
     [VIRT_FW_CFG] =      { 0x10080100,         0x100 },
@@ -95,16 +94,17 @@ static const MemMapEntry loader_rommap[] = {
     [LOADER_PARAM] =     { 0x1fc01000,       0x10000 },
 };
 
-struct LoongsonMachineState {
+typedef struct Loongson3B4KVMachineState {
     MachineState parent_obj;
+    MemoryRegion *system_iocsr;
     MemoryRegion *pio_alias;
     MemoryRegion *mmio_alias;
     MemoryRegion *ecam_alias;
-};
-typedef struct LoongsonMachineState LoongsonMachineState;
+    MemoryRegion *uart_alias;
+} Loongson3B4KVMachineState;
 
-#define TYPE_LOONGSON_MACHINE  MACHINE_TYPE_NAME("loongson3-virt")
-DECLARE_INSTANCE_CHECKER(LoongsonMachineState, LOONGSON_MACHINE, TYPE_LOONGSON_MACHINE)
+#define TYPE_LOONGSON3B4KV_MACHINE  MACHINE_TYPE_NAME("loongson3b4k-virt")
+OBJECT_DECLARE_SIMPLE_TYPE(Loongson3B4KVMachineState, LOONGSON3B4KV_MACHINE)
 
 static struct _loaderparams {
     uint64_t cpu_freq;
@@ -115,6 +115,8 @@ static struct _loaderparams {
     uint64_t kernel_entry;
     uint64_t a0, a1, a2;
 } loaderparams;
+
+uint32_t ls3b4k_reg1d0 = 0xFFFFU;
 
 static uint64_t loongson3_pm_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -143,14 +145,76 @@ static void loongson3_pm_write(void *opaque, hwaddr addr,
 static const MemoryRegionOps loongson3_pm_ops = {
     .read  = loongson3_pm_read,
     .write = loongson3_pm_write,
-    .endianness = DEVICE_NATIVE_ENDIAN,
+    .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 1,
         .max_access_size = 1
     }
 };
 
-#define DEF_LOONGSON3_FREQ (800 * 1000 * 1000)
+static uint8_t tmp_ram[0x10000];
+
+static uint64_t loongson3_qemu_read(void *opaque, hwaddr addr, unsigned size)
+{
+    if (addr + size <= 0x1fb10000 && addr >= 0x1fb00000) {
+        if (size == 8) {
+            return ldq_le_p(addr - 0x1fb00000 + tmp_ram);
+        } else if (size == 4) {
+            return ldl_le_p(addr - 0x1fb00000 + tmp_ram);
+        } else if (size == 2) {
+            return lduw_le_p(addr - 0x1fb00000 + tmp_ram);
+        } else if (size == 1) {
+            return ldub_p(addr - 0x1fb00000 + tmp_ram);
+        }
+    }
+    if (addr == 0x1fe001d0 && size == 4) {
+        return ls3b4k_reg1d0;
+    }
+    error_report("loongson_qemu_read opaue = '%p' addr = '0x%llx' size = '%u'", opaque, addr, size);
+    hw_error("wow");
+    exit(1);
+    return 0;
+}
+
+static void loongson3_qemu_write(void *opaque, hwaddr addr,
+                               uint64_t val, unsigned size)
+{
+    if (addr + size <= 0x1fb10000 && addr >= 0x1fb00000) {
+        if (size == 8) {
+            return stq_le_p(addr - 0x1fb00000 + tmp_ram, val);
+        } else if (size == 4) {
+            return stl_le_p(addr - 0x1fb00000 + tmp_ram, val);
+        } else if (size == 2) {
+            return stw_le_p(addr - 0x1fb00000 + tmp_ram, val);
+        } else if (size == 1) {
+            return stb_p(addr - 0x1fb00000 + tmp_ram, val);
+        }
+    }
+    if (addr == 0x1fe001d0 && size == 4) {
+        ls3b4k_reg1d0 = val;
+        return;
+    }
+    error_report("loongson_qemu_write opaue = '%p' addr = '0x%llx' val = '0x%llx' size = '%u'", opaque, addr, val, size);
+    hw_error("what?");
+    exit(1);
+    return;
+}
+
+static const MemoryRegionOps loongson_qemu_ops = {
+    .read = loongson3_qemu_read,
+    .write = loongson3_qemu_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = UINT32_MAX,
+    },
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = UINT32_MAX,
+    },
+};
+
+#define DEF_LOONGSON3_FREQ (1800 * 1000 * 1000)
 
 static uint64_t get_cpu_freq_hz(void)
 {
@@ -183,7 +247,7 @@ static void init_boot_param(void)
     bp->efi.smbios.vers = cpu_to_le16(1);
     init_reset_system(&(bp->reset_system));
     p += ROUND_UP(sizeof(struct boot_params), 64);
-    init_loongson_params(&(bp->efi.smbios.lp), p, Loongson_3A,
+    init_loongson_params(&(bp->efi.smbios.lp), p, Loongson_3B,
                          loaderparams.cpu_freq, loaderparams.ram_size, virt_memmap);
 
     rom_add_blob_fixed("params_rom", bp,
@@ -268,10 +332,10 @@ static void fw_cfg_boot_set(void *opaque, const char *boot_device,
     fw_cfg_modify_i16(opaque, FW_CFG_BOOT_DEVICE, boot_device[0]);
 }
 
-static void fw_conf_init(unsigned long ram_size)
+static void fw_conf_init(MemoryRegion *ioscr, unsigned long ram_size)
 {
     FWCfgState *fw_cfg;
-    hwaddr cfg_addr = virt_memmap[VIRT_FW_CFG].base;
+    hwaddr cfg_addr = 0;
 
     fw_cfg = fw_cfg_init_mem_wide(cfg_addr, cfg_addr + 8, 8, 0, NULL);
     fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, (uint16_t)current_machine->smp.cpus);
@@ -280,6 +344,8 @@ static void fw_conf_init(unsigned long ram_size)
     fw_cfg_add_i32(fw_cfg, FW_CFG_MACHINE_VERSION, 1);
     fw_cfg_add_i64(fw_cfg, FW_CFG_CPU_FREQ, get_cpu_freq_hz());
     qemu_register_boot_set(fw_cfg_boot_set, fw_cfg);
+    memory_region_add_subregion(ioscr, virt_memmap[VIRT_FW_CFG].base,sysbus_mmio_get_region(SYS_BUS_DEVICE(fw_cfg), 0));
+    memory_region_add_subregion(ioscr, virt_memmap[VIRT_FW_CFG].base + 8,sysbus_mmio_get_region(SYS_BUS_DEVICE(fw_cfg), 1));
 }
 
 static int set_prom_cmdline(ram_addr_t initrd_offset, long initrd_size)
@@ -401,7 +467,7 @@ static void main_cpu_reset(void *opaque)
     }
 }
 
-static inline void loongson3_virt_devices_init(MachineState *machine,
+static inline void loongson3b4k_virt_devices_init(MachineState *machine,
                                                DeviceState *pic)
 {
     int i;
@@ -409,7 +475,7 @@ static inline void loongson3_virt_devices_init(MachineState *machine,
     PCIBus *pci_bus;
     DeviceState *dev;
     MemoryRegion *mmio_reg, *ecam_reg;
-    LoongsonMachineState *s = LOONGSON_MACHINE(machine);
+    Loongson3B4KVMachineState *s = LOONGSON3B4KV_MACHINE(machine);
 
     dev = qdev_new(TYPE_GPEX_HOST);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
@@ -419,7 +485,7 @@ static inline void loongson3_virt_devices_init(MachineState *machine,
     ecam_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0);
     memory_region_init_alias(s->ecam_alias, OBJECT(dev), "pcie-ecam",
                              ecam_reg, 0, virt_memmap[VIRT_PCIE_ECAM].size);
-    memory_region_add_subregion(get_system_memory(),
+    memory_region_add_subregion(s->system_iocsr,
                                 virt_memmap[VIRT_PCIE_ECAM].base,
                                 s->ecam_alias);
 
@@ -428,7 +494,7 @@ static inline void loongson3_virt_devices_init(MachineState *machine,
     memory_region_init_alias(s->mmio_alias, OBJECT(dev), "pcie-mmio",
                              mmio_reg, virt_memmap[VIRT_PCIE_MMIO].base,
                              virt_memmap[VIRT_PCIE_MMIO].size);
-    memory_region_add_subregion(get_system_memory(),
+    memory_region_add_subregion(s->system_iocsr,
                                 virt_memmap[VIRT_PCIE_MMIO].base,
                                 s->mmio_alias);
 
@@ -436,9 +502,9 @@ static inline void loongson3_virt_devices_init(MachineState *machine,
     memory_region_init_alias(s->pio_alias, OBJECT(dev), "pcie-pio",
                              get_system_io(), 0,
                              virt_memmap[VIRT_PCIE_PIO].size);
-    memory_region_add_subregion(get_system_memory(),
+    memory_region_add_subregion(s->system_iocsr,
                                 virt_memmap[VIRT_PCIE_PIO].base, s->pio_alias);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 2, virt_memmap[VIRT_PCIE_PIO].base);
+    memory_region_add_subregion(s->system_iocsr, virt_memmap[VIRT_PCIE_PIO].base,sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 2));
 
     for (i = 0; i < GPEX_NUM_IRQS; i++) {
         irq = qdev_get_gpio_in(pic, PCIE_IRQ_BASE + i);
@@ -446,8 +512,8 @@ static inline void loongson3_virt_devices_init(MachineState *machine,
         gpex_set_irq_num(GPEX_HOST(dev), i, PCIE_IRQ_BASE + i);
     }
     msi_nonbroken = true;
-
-    pci_vga_init(pci_bus);
+    //vga_interface_type = VGA_VMWARE;
+    //pci_vga_init(pci_bus);
 
     if (defaults_enabled()) {
         pci_create_simple(pci_bus, -1, "pci-ohci");
@@ -464,9 +530,10 @@ static inline void loongson3_virt_devices_init(MachineState *machine,
 
         pci_nic_init_nofail(nd, pci_bus, nd->model, NULL);
     }
+
 }
 
-static void mips_loongson3_virt_init(MachineState *machine)
+static void mips_loongson3b4k_virt_init(MachineState *machine)
 {
     int i;
     long bios_size;
@@ -474,66 +541,101 @@ static void mips_loongson3_virt_init(MachineState *machine)
     Clock *cpuclk;
     CPUMIPSState *env;
     DeviceState *liointc;
+    DeviceState *rtc;
+    DeviceState *ipi;
+    Loongson3B4KVMachineState *s = LOONGSON3B4KV_MACHINE(machine);
     char *filename;
     const char *kernel_cmdline = machine->kernel_cmdline;
     const char *kernel_filename = machine->kernel_filename;
     const char *initrd_filename = machine->initrd_filename;
     ram_addr_t ram_size = machine->ram_size;
     MemoryRegion *address_space_mem = get_system_memory();
-    MemoryRegion *ram = g_new(MemoryRegion, 1);
+    MemoryRegion *lowram = g_new(MemoryRegion, 1);
+    MemoryRegion *highram = g_new(MemoryRegion, 1);
     MemoryRegion *bios = g_new(MemoryRegion, 1);
     MemoryRegion *iomem = g_new(MemoryRegion, 1);
 
     /* TODO: TCG will support all CPU types */
     if (!kvm_enabled()) {
         if (!machine->cpu_type) {
-            machine->cpu_type = MIPS_CPU_TYPE_NAME("Loongson-3A1000");
+            machine->cpu_type = MIPS_CPU_TYPE_NAME(LOONGSON3B4K_CPU_NAME);
         }
-        if (!strstr(machine->cpu_type, "Loongson-3A1000")) {
-            error_report("Loongson-3/TCG needs cpu type Loongson-3A1000");
+        if (!strstr(machine->cpu_type, LOONGSON3B4K_CPU_NAME)) {
+            error_report("Loongson-3/KVM needs cpu type %s", LOONGSON3B4K_CPU_NAME);
             exit(1);
         }
     } else {
         if (!machine->cpu_type) {
-            machine->cpu_type = MIPS_CPU_TYPE_NAME("Loongson-3A4000");
+            machine->cpu_type = MIPS_CPU_TYPE_NAME(LOONGSON3B4K_CPU_NAME);
         }
-        if (!strstr(machine->cpu_type, "Loongson-3A4000")) {
-            error_report("Loongson-3/KVM needs cpu type Loongson-3A4000");
+        if (!strstr(machine->cpu_type, LOONGSON3B4K_CPU_NAME)) {
+            error_report("Loongson-3/KVM needs cpu type %s", LOONGSON3B4K_CPU_NAME);
             exit(1);
         }
     }
 
-    if (ram_size < 512 * MiB) {
-        error_report("Loongson-3 machine needs at least 512MB memory");
+    if (ram_size < DEFAULT_RAM_SIZE) {
+        error_report("Loongson-3 machine needs at least 2 GiB memory");
         exit(1);
     }
+
+    s->system_iocsr = g_new(MemoryRegion, 1);
+    memory_region_init_io(s->system_iocsr, OBJECT(s), &loongson_qemu_ops,
+                          s, "iocsr", UINT64_MAX);
+    memory_region_add_subregion(address_space_mem, 0, s->system_iocsr);
 
     /*
      * The whole MMIO range among configure registers doesn't generate
      * exception when accessing invalid memory. Create some unimplememted
      * devices to emulate this feature.
      */
-    create_unimplemented_device("mmio fallback 0", 0x10000000, 256 * MiB);
-    create_unimplemented_device("mmio fallback 1", 0x30000000, 256 * MiB);
-
+    struct {
+        const char *name;
+        hwaddr base;
+        hwaddr size;
+    } unimpdev_info[] = 
+    {
+        {
+            "mmio fallback 0", 0x10000000, 256 * MiB
+        },
+        {
+            "mmio fallback 1", 0x30000000, 256 * MiB
+        }
+    };
+    for (i = 0; i < sizeof(unimpdev_info)/ sizeof(unimpdev_info[0]); i++) {
+        DeviceState *unimpdev = qdev_new(TYPE_UNIMPLEMENTED_DEVICE);
+        qdev_prop_set_string(unimpdev, "name", unimpdev_info[i].name);
+        qdev_prop_set_uint64(unimpdev, "size", unimpdev_info[i].size);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(unimpdev), &error_fatal);
+        memory_region_add_subregion_overlap(s->system_iocsr,
+            unimpdev_info[i].base, 
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(unimpdev), 0), -1000);
+    }
     liointc = qdev_new("loongson.liointc");
     sysbus_realize_and_unref(SYS_BUS_DEVICE(liointc), &error_fatal);
+    memory_region_add_subregion(s->system_iocsr,
+        virt_memmap[VIRT_LIOINTC].base,
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(liointc), 0));
 
-    sysbus_mmio_map(SYS_BUS_DEVICE(liointc), 0, virt_memmap[VIRT_LIOINTC].base);
-
-    serial_mm_init(address_space_mem, virt_memmap[VIRT_UART].base, 0,
+    if (serial_hd(0)) {
+        serial_mm_init(s->system_iocsr, virt_memmap[VIRT_UART].base, 0,
                    qdev_get_gpio_in(liointc, UART_IRQ), 115200, serial_hd(0),
-                   DEVICE_NATIVE_ENDIAN);
+                   DEVICE_LITTLE_ENDIAN);
+    }
 
-    sysbus_create_simple("goldfish_rtc", virt_memmap[VIRT_RTC].base,
-                         qdev_get_gpio_in(liointc, RTC_IRQ));
+    rtc = qdev_new("goldfish_rtc");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(rtc), &error_fatal);
+    memory_region_add_subregion(s->system_iocsr,
+        virt_memmap[VIRT_RTC].base,
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(rtc), 0));
+    qdev_connect_gpio_out_named(rtc, SYSBUS_DEVICE_GPIO_IRQ, 0,
+        qdev_get_gpio_in(liointc, RTC_IRQ));
 
     cpuclk = clock_new(OBJECT(machine), "cpu-refclk");
     clock_set_hz(cpuclk, DEF_LOONGSON3_FREQ);
-
+    ipi = qdev_new(TYPE_LOONGSON_IPI);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(ipi), &error_fatal);
     for (i = 0; i < machine->smp.cpus; i++) {
-        int ip;
-
         /* init CPUs */
         cpu = mips_cpu_create_with_clock(machine->cpu_type, cpuclk);
 
@@ -541,34 +643,43 @@ static void mips_loongson3_virt_init(MachineState *machine)
         cpu_mips_irq_init_cpu(cpu);
         cpu_mips_clock_init(cpu);
         qemu_register_reset(main_cpu_reset, cpu);
-
+        hwaddr node_id = i / LOONGSON3B4K_CORES_PER_NODE;
+        hwaddr core_id = i % LOONGSON3B4K_CORES_PER_NODE;
+        hwaddr dev_addr = node_id * 0x100000000000ULL + 0x3ff00000ULL +
+                   SMP_IPI_MAILBOX + core_id * CORE_IPI_LEN;
+        memory_region_add_subregion(s->system_iocsr, dev_addr,
+                                    sysbus_mmio_get_region(SYS_BUS_DEVICE(ipi), i));
+        qdev_connect_gpio_out(ipi, i, cpu->env.irq[6]);
+        
         if (i >= 4) {
             continue; /* Only node-0 can be connected to LIOINTC */
         }
 
-        for (ip = 0; ip < 4 ; ip++) {
+        for (int ip = 0; ip < 4 ; ip++) {
             int pin = i * 4 + ip;
-            sysbus_connect_irq(SYS_BUS_DEVICE(liointc),
-                               pin, cpu->env.irq[ip + 2]);
+            sysbus_connect_irq(SYS_BUS_DEVICE(liointc), pin, cpu->env.irq[ip + 2]);
         }
     }
     env = &MIPS_CPU(first_cpu)->env;
 
     /* Allocate RAM/BIOS, 0x00000000~0x10000000 is alias of 0x80000000~0x90000000 */
-    memory_region_init_rom(bios, NULL, "loongson3.bios",
+    memory_region_init_ram(bios, NULL, "loongson3.bios",
                            virt_memmap[VIRT_BIOS_ROM].size, &error_fatal);
-    memory_region_init_alias(ram, NULL, "loongson3.lowmem",
+    memory_region_init_alias(lowram, NULL, "loongson3.lowmem",
                            machine->ram, 0, virt_memmap[VIRT_LOWMEM].size);
+    memory_region_init_alias(highram, NULL, "loongson3.highmem",
+                           machine->ram, 0, ram_size);
     memory_region_init_io(iomem, NULL, &loongson3_pm_ops,
                            NULL, "loongson3_pm", virt_memmap[VIRT_PM].size);
 
-    memory_region_add_subregion(address_space_mem,
-                      virt_memmap[VIRT_LOWMEM].base, ram);
-    memory_region_add_subregion(address_space_mem,
+    memory_region_add_subregion(s->system_iocsr,
+                      virt_memmap[VIRT_LOWMEM].base, lowram);
+    memory_region_add_subregion(s->system_iocsr,
                       virt_memmap[VIRT_BIOS_ROM].base, bios);
-    memory_region_add_subregion(address_space_mem,
-                      virt_memmap[VIRT_HIGHMEM].base, machine->ram);
-    memory_region_add_subregion(address_space_mem,
+    memory_region_add_subregion(s->system_iocsr,
+                      virt_memmap[VIRT_HIGHMEM].base, highram);
+    virt_memmap[VIRT_HIGHMEM].size = ram_size;
+    memory_region_add_subregion(s->system_iocsr,
                       virt_memmap[VIRT_PM].base, iomem);
 
     /*
@@ -588,7 +699,7 @@ static void mips_loongson3_virt_init(MachineState *machine)
         init_boot_param();
     } else {
         filename = qemu_find_file(QEMU_FILE_TYPE_BIOS,
-                                  machine->firmware ?: LOONGSON3_BIOSNAME);
+                                  machine->firmware ?: LOONGSON3B4K_BIOS_NAME);
         if (filename) {
             bios_size = load_image_targphys(filename,
                                             virt_memmap[VIRT_BIOS_ROM].base,
@@ -600,37 +711,38 @@ static void mips_loongson3_virt_init(MachineState *machine)
 
         if ((bios_size < 0 || bios_size > virt_memmap[VIRT_BIOS_ROM].size) &&
             !kernel_filename && !qtest_enabled()) {
-            error_report("Could not load MIPS bios '%s'", machine->firmware);
+            error_report("Could not load Loongson3 bios '%s'", machine->firmware);
             exit(1);
         }
-
-        fw_conf_init(ram_size);
+        fw_conf_init(s->system_iocsr, ram_size);
     }
 
-    loongson3_virt_devices_init(machine, liointc);
+    loongson3b4k_virt_devices_init(machine, liointc);
 }
 
-static void loongson3v_machine_class_init(ObjectClass *oc, void *data)
+static void loongson3b4kv_machine_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
-    mc->desc = "Loongson-3 Virtualization Platform";
-    mc->init = mips_loongson3_virt_init;
+    mc->desc = "Loongson-3B4000 Virtualization Platform";
+    mc->init = mips_loongson3b4k_virt_init;
     mc->block_default_type = IF_IDE;
-    mc->max_cpus = LOONGSON_MAX_VCPUS;
-    mc->default_ram_id = "loongson3.highram";
-    mc->default_ram_size = 1600 * MiB;
+    mc->default_cpu_type = MIPS_CPU_TYPE_NAME(LOONGSON3B4K_CPU_NAME);
+    mc->max_cpus = LOONGSON3B4K_MAX_VCPUS;
+    mc->default_cpus = 4;
+    mc->default_ram_id = "loongson3.ram";
+    mc->default_ram_size = DEFAULT_RAM_SIZE;
     mc->kvm_type = mips_kvm_type;
     mc->minimum_page_bits = 14;
 }
 
-static const TypeInfo loongson3_machine_types[] = {
+static const TypeInfo loongson3b4kv_machine_types[] = {
     {
-        .name           = TYPE_LOONGSON_MACHINE,
+        .name           = TYPE_LOONGSON3B4KV_MACHINE,
         .parent         = TYPE_MACHINE,
-        .instance_size  = sizeof(LoongsonMachineState),
-        .class_init     = loongson3v_machine_class_init,
+        .instance_size  = sizeof(Loongson3B4KVMachineState),
+        .class_init     = loongson3b4kv_machine_class_init,
     }
 };
 
-DEFINE_TYPES(loongson3_machine_types)
+DEFINE_TYPES(loongson3b4kv_machine_types)

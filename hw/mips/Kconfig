@@ -44,6 +44,38 @@ config LOONGSON3V
     select MSI_NONBROKEN
     select FW_CFG_MIPS
 
+config LOONGSON3_7A1K
+    bool
+    imply VIRTIO_VGA
+    imply QXL if SPICE
+    select SERIAL
+    select I2C
+    select LS7A1K_RTC
+    select DS1338
+    select HDA
+    select PCI_EXPRESS_LS7A1K
+    select LOONGSON_I2C
+    select LOONGSON_GPIO
+    select LOONGSON_IPI
+    select LOONGSON_SPI
+    select LOONGSON_EXTIOI
+    select LOONGSON_PCH_PIC
+    select LOONGSON_PCH_MSI
+    select FW_CFG_MIPS
+
+config LOONGSON3B4KV
+    bool
+    imply VIRTIO_VGA
+    imply QXL if SPICE
+    select SERIAL
+    select GOLDFISH_RTC
+    select LOONGSON_LIOINTC
+    select LOONGSON_IPI
+    select PCI_DEVICES
+    select PCI_EXPRESS_GENERIC_BRIDGE
+    select MSI_NONBROKEN
+    select FW_CFG_MIPS
+
 config MIPS_CPS
     bool
     select PTIMER

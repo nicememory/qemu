@@ -1203,15 +1203,15 @@ FWCfgState *fw_cfg_init_mem_wide(hwaddr ctl_addr,
 
     sbd = SYS_BUS_DEVICE(dev);
     sysbus_realize_and_unref(sbd, &error_fatal);
-    sysbus_mmio_map(sbd, 0, ctl_addr);
-    sysbus_mmio_map(sbd, 1, data_addr);
+    //sysbus_mmio_map(sbd, 0, ctl_addr);
+    //sysbus_mmio_map(sbd, 1, data_addr);
 
     s = FW_CFG(dev);
 
     if (s->dma_enabled) {
         s->dma_as = dma_as;
         s->dma_addr = 0;
-        sysbus_mmio_map(sbd, 2, dma_addr);
+        //sysbus_mmio_map(sbd, 2, dma_addr);
     }
 
     return s;

@@ -77,3 +77,8 @@ config MV64361
     bool
     select PCI
     select I8259
+
+config PCI_EXPRESS_LS7A1K
+    bool
+    select PCI_EXPRESS
+    select MSI_NONBROKEN

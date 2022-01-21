@@ -14,3 +14,4 @@ softmmu_ss.add(when: 'CONFIG_GOLDFISH_RTC', if_true: files('goldfish_rtc.c'))
 softmmu_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-rtc.c'))
 
 specific_ss.add(when: 'CONFIG_MC146818RTC', if_true: files('mc146818rtc.c'))
+specific_ss.add(when: 'CONFIG_LS7A1K_RTC', if_true: files('ls7a1k_rtc.c'))

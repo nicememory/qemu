@@ -4,6 +4,7 @@
  *
  * Copyright (c) 2017-2020 Huacai Chen (chenhc@lemote.com)
  * Copyright (c) 2017-2020 Jiaxun Yang <jiaxun.yang@flygoat.com>
+ * Copyright (c) 2021 Jintao Yin <jintao.yin@i-soft.com.cn>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,12 +26,12 @@
 struct efi_memory_map_loongson {
     uint16_t vers;               /* version of efi_memory_map */
     uint32_t nr_map;             /* number of memory_maps */
-    uint32_t mem_freq;           /* memory frequence */
+    uint32_t mem_freq;           /* memory frequency */
     struct mem_map {
         uint32_t node_id;        /* node_id which memory attached to */
         uint32_t mem_type;       /* system memory, pci memory, pci io, etc. */
         uint64_t mem_start;      /* memory map start address */
-        uint32_t mem_size;       /* each memory_map size, not the total size */
+        uint32_t mem_size;       /* each memory map size, not the total size */
     } map[128];
 } QEMU_PACKED;
 
@@ -58,12 +59,12 @@ enum loongson_cpu_type {
  */
 struct efi_cpuinfo_loongson {
     uint16_t vers;               /* version of efi_cpuinfo_loongson */
-    uint32_t processor_id;       /* PRID, e.g. 6305, 6306 */
+    uint32_t processor_id;       /* PRID, e.g. 0x14C000 */
     uint32_t cputype;            /* Loongson_3A/3B, etc. */
     uint32_t total_node;         /* num of total numa nodes */
     uint16_t cpu_startup_core_id;   /* Boot core id */
     uint16_t reserved_cores_mask;
-    uint32_t cpu_clock_freq;     /* cpu_clock */
+    uint32_t cpu_clock_freq;
     uint32_t nr_cpus;
     char cpuname[64];
 } QEMU_PACKED;
@@ -129,7 +130,7 @@ struct irq_source_routing_table {
 } QEMU_PACKED;
 
 struct interface_info {
-    uint16_t vers;               /* version of the specificition */
+    uint16_t vers;               /* version of the specification */
     uint16_t size;
     uint8_t  flag;
     char description[64];
@@ -183,7 +184,7 @@ struct efi_reset_system_t {
     uint64_t ResetWarm;
     uint64_t ResetType;
     uint64_t Shutdown;
-    uint64_t DoSuspend; /* NULL if not support */
+    uint64_t DoSuspend; /* 0 if not support */
 };
 
 struct efi_loongson {
@@ -228,9 +229,9 @@ enum {
     LOADER_PARAM,
 };
 
-extern const MemMapEntry virt_memmap[];
 void init_loongson_params(struct loongson_params *lp, void *p,
-                          uint64_t cpu_freq, uint64_t ram_size);
+                          uint32_t cpu_type, uint64_t cpu_freq,
+			  uint64_t ram_size, const MemMapEntry* virt_memmap);
 void init_reset_system(struct efi_reset_system_t *reset);
 
 #endif

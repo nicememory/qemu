@@ -62,6 +62,21 @@ config RX_ICU
 config LOONGSON_LIOINTC
     bool
 
+config LOONGSON_IPI
+    bool
+
+config LOONGSON_EXTIOI
+    bool
+
+config LOONGSON_PCH_PIC
+    bool
+    select UNIMP
+
+config LOONGSON_PCH_MSI
+    bool
+    select UNIMP
+    select MSI_NONBROKEN
+
 config RISCV_ACLINT
     bool
 

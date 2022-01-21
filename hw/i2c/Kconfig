@@ -36,3 +36,6 @@ config PCA954X
 config PMBUS
     bool
     select SMBUS
+
+config LOONGSON_I2C
+    bool

@@ -188,6 +188,23 @@ static void mips_cpu_reset(DeviceState *dev)
 
     /* Reset registers to their default values */
     env->CP0_PRid = env->cpu_model->CP0_PRid;
+    env->cpucfg[LS3_CPUCFG_REG_PRId] = env->CP0_PRid;
+    env->cpucfg[LS3_CPUCFG_REG_FEATS1] = (0x7B9F8E14 | (((env->cpu_model->CP0_Config1 & (1 << CP0C1_FP)) >> CP0C1_FP)) << LS3_CPUCFG_REG_FEATS1_BT_FP_OFFSET);
+    env->cpucfg[LS3_CPUCFG_REG_FEATS2] = 0x18006407 | (((env->cpu_model->CP0_Config1 & (1 << CP0C1_PC)) >> CP0C1_PC) << LS3_CPUCFG_REG_FEATS2_BT_LPMP_OFFSET);
+    env->cpucfg[LS3_CPUCFG_REG_FEATS3] = 0x3f2f3f5;
+    env->cpucfg[LS3_CPUCFG_REG_CCFREQ] = 0;
+    env->cpucfg[LS3_CPUCFG_REG_CF] = 0;
+    env->cpucfg[LS3_CPUCFG_REG_SAFE] = 0;
+    env->cpucfg[LS3_CPUCFG_REG_MISC] = 3;
+    env->cpucsr[0] = 0x10;
+    env->cpucsr[1] = 0;
+    env->cpucsr[2] = 0x6e6f73676e6f6f4cULL;
+    env->cpucsr[3] = 0;
+    env->cpucsr[4] = 0x0000303030344233ULL;
+    env->cpucsr[5] = 0;
+    env->cpucsr[6] = 0;
+    env->cpucsr[7] = 0;
+
     env->CP0_Config0 = env->cpu_model->CP0_Config0;
 #ifdef TARGET_WORDS_BIGENDIAN
     env->CP0_Config0 |= (1 << CP0C0_BE);
@@ -657,7 +674,6 @@ MIPSCPU *mips_cpu_create_with_clock(const char *cpu_type, Clock *cpu_refclk)
     cpu = DEVICE(object_new(cpu_type));
     qdev_connect_clock_in(cpu, "clk-in", cpu_refclk);
     qdev_realize(cpu, NULL, &error_abort);
-
     return MIPS_CPU(cpu);
 }
 

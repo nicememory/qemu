@@ -37,6 +37,7 @@
 #include "qemu/qemu-print.h"
 #include "fpu_helper.h"
 #include "translate.h"
+#include "hw/hw.h"
 
 /*
  * Many sysemu-only helpers are not reachable for user-only.
@@ -320,7 +321,7 @@ enum {
 };
 
 /* Special2 opcodes */
-#define MASK_SPECIAL2(op)           (MASK_OP_MAJOR(op) | (op & 0x3F))
+#define MASK_SPECIAL2(op)           (MASK_OP_MAJOR(op) | (op & 0x7FF))
 
 enum {
     /* Multiply & xxx operations */
@@ -343,10 +344,25 @@ enum {
     OPC_MODU_G_2F   = 0x1e | OPC_SPECIAL2,
     OPC_DMODU_G_2F  = 0x1f | OPC_SPECIAL2,
     /* Misc */
-    OPC_CLZ      = 0x20 | OPC_SPECIAL2,
-    OPC_CLO      = 0x21 | OPC_SPECIAL2,
-    OPC_DCLZ     = 0x24 | OPC_SPECIAL2,
-    OPC_DCLO     = 0x25 | OPC_SPECIAL2,
+    OPC_CLZ         = 0x20 | OPC_SPECIAL2,
+    OPC_CLO         = 0x21 | OPC_SPECIAL2,
+    OPC_DCLZ        = 0x24 | OPC_SPECIAL2,
+    OPC_DCLO        = 0x25 | OPC_SPECIAL2,
+    /* Loongson EXT2 all four opcodes list as below */
+    OPC_CTZ         = 0x22 | OPC_SPECIAL2,
+    OPC_CTO         = 0x62 | OPC_SPECIAL2,
+    OPC_DCTZ        = 0xa2 | OPC_SPECIAL2,
+    OPC_DCTO        = 0xe2 | OPC_SPECIAL2,
+    /* Loongson EXT3 all eight opcodes list as below */
+    OPC_GSDMULTH    = 0x18  | OPC_SPECIAL2,
+    OPC_GSDMULTHU   = 0x19  | OPC_SPECIAL2,
+    OPC_GSMULTH     = 0x1a  | OPC_SPECIAL2,
+    OPC_GSMULTHU    = 0x1b  | OPC_SPECIAL2,
+    OPC_GSLDPC      = 0x2b  | OPC_SPECIAL2,
+    OPC_GSANDN      = 0x483 | OPC_SPECIAL2,
+    OPC_GSORN       = 0x486 | OPC_SPECIAL2,
+    OPC_GSLAUI      = OPC_LUI,
+
     /* Special */
     OPC_SDBBP    = 0x3F | OPC_SPECIAL2,
 };
@@ -438,6 +454,35 @@ enum {
     R6_OPC_SC          = 0x26 | OPC_SPECIAL3,
     R6_OPC_LLD         = 0x37 | OPC_SPECIAL3,
     R6_OPC_SCD         = 0x27 | OPC_SPECIAL3,
+};
+
+/* Loongson EXT spw opcodes */
+#define MASK_LOONGSON_EXT_SPW_DIR(op)         (MASK_OP_MAJOR(op) | (op & 0x7ff))
+#define MASK_LOONGSON_EXT_SPW_PTE(op)         (MASK_OP_MAJOR(op) | (op & 0x1f07ff))
+enum {
+    OPC_LWDIR        = 0x18 | OPC_LWC2,
+    OPC_LDDIR        = 0x98 | OPC_LWC2,
+    OPC_LWPTE        = 0x58 | OPC_LWC2,
+    OPC_LDPTE        = 0xd8 | OPC_LWC2,
+};
+
+/* Loongson csr opcodes */
+#define MASK_LOONGSON_CSR(op)         (MASK_OP_MAJOR(op) | (op & 0x1f07ff))
+enum {
+    OPC_RDCSR        = 0x000118 | OPC_LWC2,
+    OPC_WRCSR        = 0x010118 | OPC_LWC2,
+    OPC_DRDCSR       = 0x020118 | OPC_LWC2,
+    OPC_DWRCSR       = 0x030118 | OPC_LWC2,
+    OPC_RDGCSR       = 0x040118 | OPC_LWC2,
+    OPC_WRGCSR       = 0x050118 | OPC_LWC2,
+    OPC_DRDGCSR      = 0x060118 | OPC_LWC2,
+    OPC_DWRGCSR      = 0x070118 | OPC_LWC2,
+
+    OPC_CPUCFG       = 0x080118 | OPC_LWC2,
+
+    OPC_DRDTIME      = 0x090118 | OPC_LWC2,
+    OPC_RDTIMEL      = 0x0a0118 | OPC_LWC2,
+    OPC_RDTIMEH      = 0x0b0118 | OPC_LWC2,
 };
 
 /* Loongson EXT load/store quad word opcodes */
@@ -2498,7 +2543,13 @@ static void gen_logic_imm(DisasContext *ctx, uint32_t opc,
             /* OPC_AUI */
             tcg_gen_addi_tl(cpu_gpr[rt], cpu_gpr[rs], imm << 16);
             tcg_gen_ext32s_tl(cpu_gpr[rt], cpu_gpr[rt]);
-        } else {
+        } else if (rs != 0 && (ctx->insn_flags & ASE_LEXT3)){
+            /* OPC_GSDAUI */
+            TCGv t0 = tcg_temp_new();
+            gen_load_gpr(t0, rs);
+            tcg_gen_addi_tl(cpu_gpr[rt], t0, imm << 16);
+            tcg_temp_free(t0);
+        }else {
             tcg_gen_movi_tl(cpu_gpr[rt], imm << 16);
         }
         break;
@@ -3742,6 +3793,43 @@ static void gen_cl(DisasContext *ctx, uint32_t opc,
     }
 }
 
+static void gen_ct(DisasContext *ctx, uint32_t opc,
+                   int rd, int rs)
+{
+    TCGv t0;
+
+    if (rd == 0) {
+        /* Treat as NOP. */
+        return;
+    }
+    t0 = cpu_gpr[rd];
+    gen_load_gpr(t0, rs);
+
+    switch (opc) {
+    case OPC_CTO:
+#if defined(TARGET_MIPS64)
+    case OPC_DCTO:
+#endif
+        tcg_gen_not_tl(t0, t0);
+        break;
+    }
+
+    switch (opc) {
+    case OPC_CTO:
+    case OPC_CTZ:
+        tcg_gen_ext32u_tl(t0, t0);
+        tcg_gen_ctzi_tl(t0, t0, TARGET_LONG_BITS);
+        tcg_gen_subi_tl(t0, t0, TARGET_LONG_BITS - 32);
+        break;
+#if defined(TARGET_MIPS64)
+    case OPC_DCTO:
+    case OPC_DCTZ:
+        tcg_gen_ctzi_i64(t0, t0, 64);
+        break;
+#endif
+    }
+}
+
 /* Godson integer instructions */
 static void gen_loongson_integer(DisasContext *ctx, uint32_t opc,
                                  int rd, int rs, int rt)
@@ -4324,6 +4412,232 @@ static void gen_loongson_multimedia(DisasContext *ctx, int rd, int rs, int rt)
 no_rd:
     tcg_temp_free_i64(t0);
     tcg_temp_free_i64(t1);
+}
+
+static bool gen_loongson_rdcsr(DisasContext *ctx,
+                               int rs, int rd, bool is_q)
+{
+    TCGv t0;
+    bool is_not_really_handled = true;
+    TCGv_ptr addr;    
+    if (rd != 0) {
+        t0 = tcg_temp_local_new();
+        tcg_gen_andi_tl(t0, cpu_gpr[rs], 0xffffffffUL);
+        TCGLabel *cpucfg_out = gen_new_label();
+        tcg_gen_brcondi_tl(TCG_COND_LT, t0, 0, cpucfg_out);
+        tcg_gen_brcondi_tl(TCG_COND_GT, t0, 0x20, cpucfg_out);
+        addr = tcg_temp_new_ptr();
+        tcg_gen_trunc_i64_ptr(addr, t0);
+        tcg_gen_add_ptr(addr, cpu_env, addr);
+        if (is_q) {
+            tcg_gen_ld_tl(cpu_gpr[rd], addr, offsetof(CPUMIPSState, cpucsr));
+        } else {
+            tcg_gen_ld32s_tl(cpu_gpr[rd], addr, offsetof(CPUMIPSState, cpucsr));
+        }
+        is_not_really_handled = false;
+        tcg_temp_free_ptr(addr);
+        gen_set_label(cpucfg_out);
+        if (is_not_really_handled) {
+            tcg_gen_movi_tl(cpu_gpr[rd], 0);
+        }
+        tcg_temp_free(t0);
+    }
+    return true;
+}
+
+static bool gen_loongson_wrcsr(DisasContext *ctx,
+                               int rs, int rd, bool is_q)
+{
+    error_printf(TARGET_FMT_lx ": %08x Processed %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "wrcsr",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+    return true;
+}
+
+static bool gen_loongson_csr(DisasContext *ctx, int rt,
+                               int rs, int rd)
+{
+    bool ret = false;
+    TCGv t0;
+    TCGv_ptr addr;
+    switch (MASK_LOONGSON_CSR(ctx->opcode)) {
+    case OPC_RDCSR:
+        ret = gen_loongson_rdcsr(ctx, rs, rd, false);
+        break;
+    case OPC_DRDCSR:
+        ret = gen_loongson_rdcsr(ctx, rs, rd, true);
+        break;
+    case OPC_WRCSR:
+        ret = gen_loongson_wrcsr(ctx, rs, rd, false);
+        break;
+    case OPC_DWRCSR:
+        ret = gen_loongson_wrcsr(ctx, rs, rd, true);
+        break;
+    case OPC_RDGCSR:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "rdgcsr",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    case OPC_WRGCSR:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "wrgcsr",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    case OPC_DRDGCSR:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "drdgcsr",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    case OPC_DWRGCSR:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "dwrgcsr",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    case OPC_CPUCFG:
+        t0 = tcg_temp_local_new();
+        tcg_gen_muli_tl(t0, cpu_gpr[rs], sizeof (uint32_t));
+        TCGLabel *cpucfg_out = gen_new_label();
+        tcg_gen_brcondi_tl(TCG_COND_LT, t0, 0, cpucfg_out);
+        tcg_gen_brcondi_tl(TCG_COND_GE, t0, LS3_CPUCFG_REG_NUM * sizeof(uint32_t), cpucfg_out);
+        addr = tcg_temp_new_ptr();
+        tcg_gen_trunc_i64_ptr(addr, t0);
+        tcg_gen_add_ptr(addr, cpu_env, addr);
+        tcg_gen_ld32s_tl(cpu_gpr[rd], addr, offsetof(CPUMIPSState, cpucfg));
+        tcg_temp_free_ptr(addr);
+        gen_set_label(cpucfg_out);
+        tcg_temp_free(t0);
+        ret = true;
+        break;
+    case OPC_DRDTIME:
+        tcg_gen_ld_tl(cpu_gpr[rd], cpu_env, offsetof(CPUMIPSState, cp0_count_ns));
+        error_printf(TARGET_FMT_lx ": %08x Processed %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "drdtime",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        ret = true;
+        break;
+    case OPC_RDTIMEL:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "rdtimel",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    case OPC_RDTIMEH:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "rdtimeh",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    default:
+        break;
+    }
+    return ret;
+}
+
+static bool gen_loongson_spw(DisasContext *ctx, int rt,
+                               int rs, int rd)
+{
+    bool ret = false;
+    // TCGv t0, t1;
+    switch (MASK_LOONGSON_EXT_SPW_PTE(ctx->opcode)) {
+    case OPC_LDPTE:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "ldpte",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    case OPC_LWPTE:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "lwpte",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    default:
+        break;
+    }
+
+    if (ret) {
+        return ret;
+    }
+
+    switch (MASK_LOONGSON_EXT_SPW_DIR(ctx->opcode)) {
+    case OPC_LDDIR:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "lddir",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    case OPC_LWDIR:
+        error_printf(TARGET_FMT_lx ": %08x Invalid %s %03x %03x %03x %03x %03x\n", \
+                          ctx->base.pc_next, ctx->opcode, "lwdir",            \
+                          ctx->opcode >> 26,              \
+                          ((ctx->opcode >> 21) & 0x1F), \
+                          ((ctx->opcode >> 16) & 0x1F), \
+                          ((ctx->opcode >> 11) & 0x1F), \
+                          ctx->opcode & 0x7FF);
+        exit(1);
+        ret = true;
+        break;
+    default:
+        break;
+    }
+    return ret;
 }
 
 static void gen_loongson_lswc2(DisasContext *ctx, int rt,
@@ -14262,7 +14576,8 @@ static void decode_opc_special2_legacy(CPUMIPSState *env, DisasContext *ctx)
 {
     int rs, rt, rd;
     uint32_t op1;
-
+    TCGv t0;
+    TCGv t1;
     rs = (ctx->opcode >> 21) & 0x1f;
     rt = (ctx->opcode >> 16) & 0x1f;
     rd = (ctx->opcode >> 11) & 0x1f;
@@ -14293,6 +14608,11 @@ static void decode_opc_special2_legacy(CPUMIPSState *env, DisasContext *ctx)
         check_insn(ctx, ISA_MIPS_R1);
         gen_cl(ctx, op1, rd, rs);
         break;
+    case OPC_CTO:
+    case OPC_CTZ:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT2);
+        gen_ct(ctx, op1, rd, rs);
+        break;
     case OPC_SDBBP:
         if (is_uhi(extract32(ctx->opcode, 6, 20))) {
             gen_helper_do_semihosting(cpu_env);
@@ -14312,6 +14632,12 @@ static void decode_opc_special2_legacy(CPUMIPSState *env, DisasContext *ctx)
         check_mips_64(ctx);
         gen_cl(ctx, op1, rd, rs);
         break;
+    case OPC_DCTO:
+    case OPC_DCTZ:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT2);
+        check_mips_64(ctx);
+        gen_ct(ctx, op1, rd, rs);
+        break;
     case OPC_DMULT_G_2F:
     case OPC_DMULTU_G_2F:
     case OPC_DDIV_G_2F:
@@ -14321,7 +14647,95 @@ static void decode_opc_special2_legacy(CPUMIPSState *env, DisasContext *ctx)
         check_insn(ctx, INSN_LOONGSON2F | ASE_LEXT);
         gen_loongson_integer(ctx, op1, rd, rs, rt);
         break;
+    case OPC_GSDMULTH:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT3);
+        if (rd != 0) {
+            if (rs != 0 && rt != 0) {
+                t0 = tcg_temp_new();
+                tcg_gen_muls2_tl(t0, cpu_gpr[rd], cpu_gpr[rs], cpu_gpr[rt]);
+                tcg_temp_free(t0);
+            } else {
+                tcg_gen_movi_tl(cpu_gpr[rd], 0);
+            }
+        }
+        break;
+    case OPC_GSDMULTHU:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT3);
+        if (rd != 0) {
+            if (rs != 0 && rt != 0) {
+                t0 = tcg_temp_new();
+                tcg_gen_mulu2_tl(t0, cpu_gpr[rd], cpu_gpr[rs], cpu_gpr[rt]);
+                tcg_temp_free(t0);
+            } else {
+                tcg_gen_movi_tl(cpu_gpr[rd], 0);
+            }
+        }
+        break;
 #endif
+    case OPC_GSMULTH:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT3);
+        if (rd != 0) {
+            if (rs != 0 && rt != 0) {
+                t0 = tcg_temp_new();
+                tcg_gen_muls2_tl(t0, cpu_gpr[rd], cpu_gpr[rs], cpu_gpr[rt]);
+                tcg_gen_ext32s_tl(cpu_gpr[rd], cpu_gpr[rd]);
+                tcg_temp_free(t0);
+            } else {
+                tcg_gen_movi_tl(cpu_gpr[rd], 0);
+            }
+        }
+        break;
+    case OPC_GSMULTHU:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT3);
+        if (rd != 0) {
+            if (rs != 0 && rt != 0) {
+                t0 = tcg_temp_new();
+                t1 = tcg_temp_new();
+                tcg_gen_ext32u_tl(t0, cpu_gpr[rs]);
+                tcg_gen_ext32u_tl(t1, cpu_gpr[rt]);
+                tcg_gen_mulu2_tl(t0, cpu_gpr[rd], t0, t1);
+                tcg_gen_ext32u_tl(cpu_gpr[rd], cpu_gpr[rd]);
+                tcg_temp_free(t1);
+                tcg_temp_free(t0);
+            } else {
+                tcg_gen_movi_tl(cpu_gpr[rd], 0);
+            }
+        }
+        break;
+    case OPC_GSANDN:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT3);
+        if (rd != 0) {
+            if (rs != 0) {
+                if (rt != 0) {
+                    tcg_gen_andc_tl(cpu_gpr[rd], cpu_gpr[rs], cpu_gpr[rt]);
+                } else {
+                    tcg_gen_mov_tl(cpu_gpr[rd], cpu_gpr[rs]);
+                }
+            } else {
+                tcg_gen_movi_tl(cpu_gpr[rd], 0);
+            }
+        }
+        break;
+    case OPC_GSORN:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT3);
+        if (rd != 0) {
+            if (rt != 0) {
+                if (rs != 0) {
+                    tcg_gen_orc_tl(cpu_gpr[rd], cpu_gpr[rs], cpu_gpr[rt]);
+                } else {
+                    tcg_gen_not_tl(cpu_gpr[rd], cpu_gpr[rt]);
+                }
+            } else {
+                tcg_gen_movi_tl(cpu_gpr[rd], ~((target_ulong)0));
+            }
+        }
+        break;
+    case OPC_GSLDPC:
+        check_insn(ctx, INSN_LOONGSON3A | ASE_LEXT3);
+        if (rd != 0) {
+            tcg_gen_addi_tl(cpu_gpr[rd], cpu_PC, 8);
+        }
+        break;
     default:            /* Invalid */
         MIPS_INVAL("special2_legacy");
         gen_reserved_instruction(ctx);
@@ -15729,6 +16143,17 @@ static bool decode_opc_legacy(CPUMIPSState *env, DisasContext *ctx)
 
     /* Compact branches [R6] and COP2 [non-R6] */
     case OPC_BC: /* OPC_LWC2 */
+        if (ctx->insn_flags & ASE_LCSR) {
+            if (gen_loongson_csr(ctx, rt, rs, rd)) {
+                break;
+            }
+        }
+        if (ctx->insn_flags & ASE_LEXT) {
+            if (gen_loongson_spw(ctx, rt, rs, rd)) {
+                break;
+            }
+        }
+        /* fall through */
     case OPC_BALC: /* OPC_SWC2 */
         if (ctx->insn_flags & ISA_MIPS_R6) {
             /* OPC_BC, OPC_BALC */
@@ -15904,6 +16329,8 @@ static bool decode_opc_legacy(CPUMIPSState *env, DisasContext *ctx)
         break;
     default:            /* Invalid */
         MIPS_INVAL("major opcode");
+        error_report("%x", ctx->opcode);
+        exit(1);
         return false;
     }
     return true;

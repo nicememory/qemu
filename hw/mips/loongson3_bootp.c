@@ -27,11 +27,11 @@
 
 #define LOONGSON3_CORE_PER_NODE 4
 
-static void init_cpu_info(void *g_cpuinfo, uint64_t cpu_freq)
+static void init_cpu_info(void *g_cpuinfo, uint32_t cpu_type, uint64_t cpu_freq)
 {
     struct efi_cpuinfo_loongson *c = g_cpuinfo;
 
-    c->cputype = cpu_to_le32(Loongson_3A);
+    c->cputype = cpu_to_le32(cpu_type);
     c->processor_id = cpu_to_le32(MIPS_CPU(first_cpu)->env.CP0_PRid);
     if (cpu_freq > UINT_MAX) {
         c->cpu_clock_freq = cpu_to_le32(UINT_MAX);
@@ -63,7 +63,7 @@ static void init_memory_map(void *g_map, uint64_t ram_size)
     emap->map[1].mem_size = cpu_to_le32((ram_size / MiB) - 256);
 }
 
-static void init_system_loongson(void *g_system)
+static void init_system_loongson(void *g_system, const MemMapEntry* virt_memmap)
 {
     struct system_loongson *s = g_system;
 
@@ -76,7 +76,7 @@ static void init_system_loongson(void *g_system)
     s->uarts[0].uart_base = cpu_to_le64(virt_memmap[VIRT_UART].base);
 }
 
-static void init_irq_source(void *g_irq_source)
+static void init_irq_source(void *g_irq_source, const MemMapEntry* virt_memmap)
 {
     struct irq_source_routing_table *irq_info = g_irq_source;
 
@@ -112,9 +112,10 @@ static void init_special_info(void *g_special)
 }
 
 void init_loongson_params(struct loongson_params *lp, void *p,
-                          uint64_t cpu_freq, uint64_t ram_size)
+                          uint32_t cpu_type, uint64_t cpu_freq,
+			  uint64_t ram_size, const MemMapEntry* virt_memmap)
 {
-    init_cpu_info(p, cpu_freq);
+    init_cpu_info(p, cpu_type, cpu_freq);
     lp->cpu_offset = cpu_to_le64((uintptr_t)p - (uintptr_t)lp);
     p += ROUND_UP(sizeof(struct efi_cpuinfo_loongson), 64);
 
@@ -122,11 +123,11 @@ void init_loongson_params(struct loongson_params *lp, void *p,
     lp->memory_offset = cpu_to_le64((uintptr_t)p - (uintptr_t)lp);
     p += ROUND_UP(sizeof(struct efi_memory_map_loongson), 64);
 
-    init_system_loongson(p);
+    init_system_loongson(p, virt_memmap);
     lp->system_offset = cpu_to_le64((uintptr_t)p - (uintptr_t)lp);
     p += ROUND_UP(sizeof(struct system_loongson), 64);
 
-    init_irq_source(p);
+    init_irq_source(p, virt_memmap);
     lp->irq_offset = cpu_to_le64((uintptr_t)p - (uintptr_t)lp);
     p += ROUND_UP(sizeof(struct irq_source_routing_table), 64);
 

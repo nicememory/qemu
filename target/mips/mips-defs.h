@@ -53,6 +53,14 @@
 #define ASE_LMMI          0x0040000000000000ULL
 /* Loongson EXTensions */
 #define ASE_LEXT          0x0080000000000000ULL
+/* Loongson EXTensions 2 */
+#define ASE_LEXT2         0x0100000000000000ULL
+/* Loongson EXTensions 3 */
+#define ASE_LEXT3         0x0200000000000000ULL
+/* Loongson AMO */
+#define ASE_LAMO          0x0400000000000000ULL
+/* Loongson CSR */
+#define ASE_LCSR          0x0800000000000000ULL
 
 /* MIPS CPU defines. */
 #define CPU_MIPS1       (ISA_MIPS1)
